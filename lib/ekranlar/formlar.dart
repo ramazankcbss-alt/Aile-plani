@@ -26,7 +26,67 @@ class _ProgramFormuState extends State<ProgramFormu> {
   late String _tur = widget.oge?.tur ?? 'aile';
   late List<String> _kisiler = [...?widget.oge?.kisiler];
 
-  static const _sureler = [15, 30, 45, 60, 90, 120, 180, 240, 480];
+  static const _sureler = [15, 30, 45, 60, 90, 120, 150, 180, 240, 300, 360, 480, 600, tamGun];
+  static const tamGun = 720;
+  static const _ozel = -1;
+
+  String _sureEtiketi(int s) => switch (s) {
+        tamGun => 'Tam gün (12 sa)',
+        600 => '10 sa (iş günü)',
+        _ => sureYaz(s),
+      };
+
+  Future<void> _sureSec(int? v) async {
+    if (v == null) return;
+    if (v == _ozel) {
+      final sa = TextEditingController(text: '${_sure ~/ 60}');
+      final dk = TextEditingController(text: '${_sure % 60}');
+      final r = await showDialog<int>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Özel süre'),
+          content: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: sa,
+                  autofocus: true,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(suffixText: 'saat'),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: TextField(
+                  controller: dk,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(suffixText: 'dk'),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Vazgeç')),
+            FilledButton(
+              onPressed: () {
+                final t = (int.tryParse(sa.text.trim()) ?? 0) * 60 + (int.tryParse(dk.text.trim()) ?? 0);
+                if (t < 5 || t > 24 * 60) return;
+                Navigator.pop(ctx, t);
+              },
+              child: const Text('Tamam'),
+            ),
+          ],
+        ),
+      );
+      if (r != null) setState(() => _sure = r);
+      return;
+    }
+    setState(() {
+      _sure = v;
+      // Tam gün ya da iş günü seçilince akşam saati sabaha çekilir.
+      if (v >= 600 && _saat + v > 24 * 60) _saat = 7 * 60;
+    });
+  }
 
   @override
   void dispose() {
@@ -142,17 +202,27 @@ class _ProgramFormuState extends State<ProgramFormu> {
                   child: DropdownButtonHideUnderline(
                     child: DropdownButton<int>(
                       isExpanded: true,
-                      value: _sureler.contains(_sure) ? _sure : 60,
+                      value: _sure,
                       items: [
                         for (final s in _sureler)
-                          DropdownMenuItem(value: s, child: Text(sureYaz(s))),
+                          DropdownMenuItem(value: s, child: Text(_sureEtiketi(s))),
+                        if (!_sureler.contains(_sure))
+                          DropdownMenuItem(value: _sure, child: Text(sureYaz(_sure))),
+                        const DropdownMenuItem(value: _ozel, child: Text('Özel süre…')),
                       ],
-                      onChanged: (v) => setState(() => _sure = v ?? 60),
+                      onChanged: _sureSec,
                     ),
                   ),
                 ),
               ),
             ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 16),
+          child: Text(
+            'Bitiş: ${_saat + _sure >= 24 * 60 ? 'gece yarısından sonra (${saatYaz((_saat + _sure) % (24 * 60))})' : saatYaz(_saat + _sure)}',
+            style: const TextStyle(color: Renk.soluk, fontSize: 13),
           ),
         ),
         Alan(
