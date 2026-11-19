@@ -1,0 +1,84 @@
+rules_version = '2';
+
+// Aile Planı - Firestore güvenlik kuralları (aile-plani projesi)
+// Aile verisini yalnızca o ailenin üyeleri görür ve değiştirir.
+// Yeni üye, aileyi kuranın paylaştığı davet koduyla yalnızca kendini ekler.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function uid() { return request.auth.uid; }
+    function shortStr(v, max) { return v is string && v.size() <= max; }
+    function aileYolu(aid) { return /databases/$(database)/documents/ap_aileler/$(aid); }
+    function uye(aid) { return signedIn() && uid() in get(aileYolu(aid)).data.uyeler; }
+
+    match /ap_kullanicilar/{userId} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create, update: if signedIn() && uid() == userId
+        && (!('ad' in request.resource.data) || shortStr(request.resource.data.ad, 80))
+        && (!('aileId' in request.resource.data) || shortStr(request.resource.data.aileId, 64))
+        && (!('kisiId' in request.resource.data) || shortStr(request.resource.data.kisiId, 32));
+      allow delete: if false;
+    }
+
+    // Davet kodu → aile. Kodu bilen okur; yalnızca ailenin kayıtlı koduyla yazılabilir.
+    match /ap_kodlar/{kod} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create: if signedIn()
+        && uid() in getAfter(aileYolu(request.resource.data.aileId)).data.uyeler
+        && getAfter(aileYolu(request.resource.data.aileId)).data.kod == kod;
+      allow delete: if signedIn() && uye(resource.data.aileId);
+      allow update: if false;
+    }
+
+    match /ap_aileler/{aid} {
+      allow get: if signedIn() && uid() in resource.data.uyeler;
+      allow list: if false;
+      allow create: if signedIn()
+        && request.resource.data.sahip == uid()
+        && request.resource.data.uyeler == [uid()]
+        && shortStr(request.resource.data.ad, 60)
+        && shortStr(request.resource.data.kod, 16)
+        && request.resource.data.kisiler is list
+        && request.resource.data.kisiler.size() <= 30;
+      allow update: if signedIn() && (
+        // Üye: ayarlar ve kişiler. Sahip değişmez, sahip çıkarılamaz.
+        // Üyeleri yalnızca sahip çıkarabilir; kodu yalnızca sahip yeniler.
+        (uid() in resource.data.uyeler
+          && request.resource.data.sahip == resource.data.sahip
+          && resource.data.sahip in request.resource.data.uyeler
+          && (uid() == resource.data.sahip
+              || request.resource.data.uyeler.toSet() == resource.data.uyeler.toSet())
+          && (uid() == resource.data.sahip || request.resource.data.kod == resource.data.kod)
+          && shortStr(request.resource.data.ad, 60)
+          && request.resource.data.kisiler is list
+          && request.resource.data.kisiler.size() <= 30)
+        // Katılım: davet koduyla yalnızca kendini ekler.
+        || (!(uid() in resource.data.uyeler)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['uyeler'])
+          && request.resource.data.uyeler.toSet() == resource.data.uyeler.toSet().union([uid()].toSet())
+          && getAfter(/databases/$(database)/documents/ap_aileler/$(aid)/katilim/$(uid())).data.kod == resource.data.kod)
+      );
+      allow delete: if signedIn() && uid() == resource.data.sahip;
+
+      match /katilim/{userId} {
+        allow create, update: if signedIn() && uid() == userId
+          && shortStr(request.resource.data.kod, 16)
+          && request.resource.data.kod.size() >= 6;
+        allow read: if uye(aid);
+        allow delete: if false;
+      }
+
+      match /{koleksiyon}/{belge} {
+        function kayitKoleksiyonu() {
+          return koleksiyon in ['program', 'planlar', 'dilekler', 'aliskanliklar', 'harcamalar'];
+        }
+        allow read, delete: if kayitKoleksiyonu() && uye(aid);
+        allow create, update: if kayitKoleksiyonu() && uye(aid)
+          && request.resource.data.size() <= 30;
+      }
+    }
+  }
+}
